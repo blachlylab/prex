@@ -16,6 +16,7 @@ import subprocess
 import tempfile
 from distutils.version import LooseVersion 
 from pdb import set_trace as stop
+import modGTF as gtf 
 
 #import bio
 
@@ -31,6 +32,13 @@ id_descriptions = { ENST: 'ensembl! transcript',
                     UCSC: 'UCSC transcript id',
                     REFSEQ: 'NCBI Refseq id',
                     SYMBOL: 'Official gene symbol' }
+
+# TO DO: figure out what column to pull in case of UCSC or REFSEQ identifiers
+id_gff3_names    = { ENST: 'transcript_id',
+                    ENSG: 'gene_id',
+                    UCSC: 'TBD',
+                    REFSEQ: 'TBD',
+                    SYMBOL: 'gene_name' }
 
 def load_config():
     """
@@ -85,7 +93,7 @@ def using_new_bedtools():
         return True
 
 
-def bedtools_cmd(chr, start, end, fasta_in, fasta_out):
+def bedtools_cmd(chrom, start, end, identifier, fasta_in, fasta_out):
     """
     TBD
 
@@ -99,8 +107,8 @@ def bedtools_cmd(chr, start, end, fasta_in, fasta_out):
     -s      Force strandedness. If the feature occupies the antisense strand, the sequence will be reverse complemented. Default: strand information is ignored.
     -split  Given BED12 input, extract and concatenate the sequences from the BED blocks (e.g., exons)
     """
-    
-    bed_fields = [chr, start, end, 'SOMEKINDOFNAME']
+    bed_name = identifier + ";promoter;" + chrom + ":" + str(start) + "-" + str(end)
+    bed_fields = [chrom, start, end, bed_name]
     bed_line   = '\t'.join(bed_fields) + '\n'       # fails without newline
     
     with tempfile.NamedTemporaryFile(mode='w') as bedfileptr:
@@ -123,6 +131,36 @@ def bedtools_cmd(chr, start, end, fasta_in, fasta_out):
         if outfile: 
             outfile.close()
     return True
+
+def do_gff3_stuff(gff3, id_column, identifier, up, down):
+    # Do GFF3 stuff here
+    annot = gtf.dataframe(gff3)
+    # cast start as int
+    annot.loc[annot.index ,'start'] = annot['start'].astype(int)
+    pAnnot = annot.dropna(subset=['tag'])
+    tmp = pAnnot[pAnnot[id_column]==identifier][['feature','seqname','start','strand']].drop_duplicates()
+    
+    
+    # a check for whether any features have more than 1 primary start codon or no primary start codon. 
+    # code will not work correctly in these cases
+    if len(tmp[tmp["feature"]=="start_codon"]) < 1:
+        warn("no {0} known by this identifier: {1}".format(id_column, identifier))
+        stop()
+    elif len(tmp[tmp["feature"]=="start_codon"]) > 1:
+        warn("too many primary isoforms for {0}".format(identifier))
+        stop()
+    
+    
+    CDS = tmp[tmp["feature"]=="start_codon"]["start"].values[0]
+    chrom = tmp[tmp["feature"]=="start_codon"]["seqname"].values[0]
+    strand = tmp[tmp["feature"]=="start_codon"]["strand"].values[0]
+    if strand == "+":
+        bed_start = CDS - up 
+        bed_stop  = CDS + down 
+    elif strand == "-":
+        bed_start = CDS - down 
+        bed_stop  = CDS + up
+    return chrom, bed_start, bed_stop
 
 def main():
     parser = argparse.ArgumentParser(description='Return promoter sequence for given gene', 
@@ -150,12 +188,12 @@ def main():
 
     # Autodetect gene identifier
     id_type = decode_id(args.identifier)
+    # get gff3 column while we're at it
+    id_column = id_gff3_names[id_type]
     if id_type:
         info(args.identifier + " => " + id_descriptions[id_type])
-
-    # Do GFF3 stuff here
-
-    bedtools_cmd('chr1','1','100', config['fasta'],'fastaout.fa')
+    chrom, bed_start, bed_stop = do_gff3_stuff(config['gff3'], id_column, args.identifier, args.up, args.down)
+    bedtools_cmd(chrom,str(bed_start),str(bed_stop), args.identifier, config['fasta'],'fastaout.fa')
 #
 # Print warning / exit messages according to template
 #
