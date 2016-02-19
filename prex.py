@@ -14,6 +14,8 @@ import os
 import sys
 import subprocess
 import tempfile
+from distutils.version import LooseVersion 
+from pdb import set_trace as stop
 
 #import bio
 
@@ -31,7 +33,9 @@ id_descriptions = { ENST: 'ensembl! transcript',
                     SYMBOL: 'Official gene symbol' }
 
 def load_config():
-    """Read prex.json for default FASTA and GFF3"""
+    """
+    Read prex.json for default FASTA and GFF3
+    """
     if os.path.isfile('prex.json'):
         with open('prex.json','r') as f:
             config = json.load(f)
@@ -40,16 +44,24 @@ def load_config():
         return dict()
 
 def validate_file(filename):
-    # I suppose we should also see if file is openable
+    '''
+    Check whether the input file exists and is readable
+    '''
     if not os.path.isfile(os.path.abspath(os.path.expanduser(filename))):
         abort("File not found: " + filename)
     else:
-        info(filename)
+        try:
+            open(filename)
+            info(filename)
+        except Exception as e:
+            abort(e)
     return os.path.abspath(os.path.expanduser(filename))
 
 def decode_id(identifier):
-    """Take gene identifier and guess whether it is 
-    gene symbol, or ensembl, refseq, or UCSC gene id"""
+    """
+    Take gene identifier and guess whether it is 
+    gene symbol, or ensembl, refseq, or UCSC gene id
+    """
 
     if re.search('^ENST[0-9]{11}', identifier): return ENST
     elif re.search('^ENSG[0-9]{11}', identifier): return ENSG
@@ -60,8 +72,22 @@ def decode_id(identifier):
         warn("I was unable to understand your gene id: " + identifier)
         return None
 
+def using_new_bedtools():
+    '''
+    determine which version of bedtools is installed.
+    return true if the newest version is being used, i.e. '-fo' flag removed from getfasta
+    return false if using an older version that still uses '-fo'
+    '''
+    user_version = subprocess.check_output(['bedtools', '--version']).strip().split()[1]
+    if LooseVersion(user_version) < LooseVersion('v2.25'):
+        return False 
+    else:
+        return True
+
+
 def bedtools_cmd(chr, start, end, fasta_in, fasta_out):
-    """TBD
+    """
+    TBD
 
     bedtools getfasta usage/brief summary
     
@@ -72,7 +98,7 @@ def bedtools_cmd(chr, start, end, fasta_in, fasta_out):
     -tab    Report extract sequences in a tab-delimited format instead of in FASTA format.
     -s      Force strandedness. If the feature occupies the antisense strand, the sequence will be reverse complemented. Default: strand information is ignored.
     -split  Given BED12 input, extract and concatenate the sequences from the BED blocks (e.g., exons)
-"""
+    """
     
     bed_fields = [chr, start, end, 'SOMEKINDOFNAME']
     bed_line   = '\t'.join(bed_fields) + '\n'       # fails without newline
@@ -81,9 +107,21 @@ def bedtools_cmd(chr, start, end, fasta_in, fasta_out):
         bedfileptr.write(bed_line)
         bedfileptr.flush()
         cmd = ['bedtools', 'getfasta', '-name', '-s', '-fi', fasta_in, '-bed', bedfileptr.name, '-fo', fasta_out]
+        if using_new_bedtools():
+            # new version of getfasta doesn't have -fo option. 
+            # strip the option from the command and specify output file name
+            outfile = open(fasta_out,'w')
+            cmd = cmd[:-2]
+        else:
+            # old version of bedtools requires -fo option
+            # set outfile to be none and pass output file option to bedtools call
+            outfile = None
+
         info("Running " + ' '.join(cmd))
         # subprocess call
-        subprocess.check_output(cmd)
+        subprocess.call(cmd, stdout=outfile)
+        if outfile: 
+            outfile.close()
     return True
 
 def main():
