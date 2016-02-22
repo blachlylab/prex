@@ -194,7 +194,8 @@ def main():
     if id_type:
         info(args.identifier + " => " + id_descriptions[id_type])
     chrom, bed_start, bed_stop = do_gff3_stuff(config['gff3'], id_column, args.identifier, args.up, args.down)
-    bedtools_cmd(chrom,str(bed_start),str(bed_stop), args.identifier, config['fasta'],'fastaout.fa')
+    fastaout_fn = args.identifier + ".fa"
+    bedtools_cmd(chrom,str(bed_start),str(bed_stop), args.identifier, config['fasta'], fastaout_fn)
 #
 # Print warning / exit messages according to template
 #
