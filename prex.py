@@ -145,8 +145,8 @@ def do_gff3_stuff(gff3, id_column, identifier, up, down):
     # a check for whether any features have more than 1 primary start codon or no primary start codon. 
     # code will not work correctly in these cases
     if len(tmp[tmp["feature"]=="start_codon"]) < 1:
-        warn("no {0} known by this identifier: {1}".format(id_column, identifier))
-        stop()
+        abort("no {0} known by this identifier: {1}".format(id_column, identifier))
+        #stop()
     elif len(tmp[tmp["feature"]=="start_codon"]) > 1:
         warn("too many primary isoforms for {0}".format(identifier))
         stop()
