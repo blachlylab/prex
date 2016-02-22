@@ -133,23 +133,23 @@ def bedtools_cmd(chrom, start, end, identifier, fasta_in, fasta_out):
             outfile.close()
     return True
 
-def do_gff3_stuff(gff3, id_column, identifier, up, down):
+def do_gff3_stuff(annot, id_column, identifier, up, down):
     # Do GFF3 stuff here
-    annot = gtf.dataframe(gff3)
-    # cast start as int
-    annot.loc[annot.index ,'start'] = annot['start'].astype(int)
+    
     pAnnot = annot.dropna(subset=['tag'])
     tmp = pAnnot[pAnnot[id_column]==identifier][['feature','seqname','start','strand']].drop_duplicates()
+    if len(tmp) == 0 and len(annot[annot[id_column]==identifier]) == 0:
+        abort("no {0} known by this identifier: {1}".format(id_column, identifier))
     
     
     # a check for whether any features have more than 1 primary start codon or no primary start codon. 
     # code will not work correctly in these cases
     if len(tmp[tmp["feature"]=="start_codon"]) < 1:
-        abort("no {0} known by this identifier: {1}".format(id_column, identifier))
-        #stop()
+        warn("no principal isoform found for {0}".format(identifier))
+        return Region()
     elif len(tmp[tmp["feature"]=="start_codon"]) > 1:
         warn("too many primary isoforms for {0}".format(identifier))
-        stop()
+        return Region()
     
     
     CDS = tmp[tmp["feature"]=="start_codon"]["start"].values[0]
@@ -161,12 +161,26 @@ def do_gff3_stuff(gff3, id_column, identifier, up, down):
     elif strand == "-":
         bed_start = CDS - down 
         bed_stop  = CDS + up
-    return chrom, bed_start, bed_stop
+    return Region(chrom, bed_start, bed_stop)
+
+class Region(object):
+    def __init__(self, chrom=None, start=None, stop=None):
+        self.chrom = chrom
+        self.start = start
+        self.stop = stop
+        # can also add name, score, and strand later on if necessary
+    def __bool__(self):
+        if any([self.chrom, self.start, self.stop]):
+            return True 
+        else:
+            return False 
+    # to override bool in python 2.7 and/or 3
+    __nonzero__=__bool__
 
 def main():
     parser = argparse.ArgumentParser(description='Return promoter sequence for given gene', 
                                     formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument('identifier', help='Gene identifier: Gene symbol, ensembl! gene/transcript id, Refseq gene id, UCSC gene id')
+    parser.add_argument('identifiers', nargs='+', help='Gene identifier: Gene symbol, ensembl! gene/transcript id, Refseq gene id, UCSC gene id')
     parser.add_argument('-f', '--fasta',metavar='filename', help='(multi)FASTA file')
     parser.add_argument('-g', '--gff3', metavar='filename', help='GFF3 formatted annotation')
     parser.add_argument('-u', '--up',  metavar='nt', type=int, default=1000, help='Bases upstream of TSS')
@@ -185,16 +199,30 @@ def main():
         abort("Please specify a FASTA file and GFF3 annotation\n(or define defaults in your prex.json config file)")
         
     config['fasta'] = validate_file(config['fasta'])
-    config['gff3']  = validate_file(config['gff3'])        
+    config['gff3']  = validate_file(config['gff3'])   
+    info("loading gff3")
+    annot = gtf.dataframe(config['gff3'])
+    # cast start as int
+    annot.loc[annot.index ,'start'] = annot['start'].astype(int)
+    info("probing genes")     
 
-    # Autodetect gene identifier
-    id_type = decode_id(args.identifier)
-    # get gff3 column while we're at it
-    id_column = id_gff3_names[id_type]
-    if id_type:
-        info(args.identifier + " => " + id_descriptions[id_type])
-    chrom, bed_start, bed_stop = do_gff3_stuff(config['gff3'], id_column, args.identifier, args.up, args.down)
-    bedtools_cmd(chrom,str(bed_start),str(bed_stop), args.identifier, config['fasta'],'fastaout.fa')
+    for identifier in args.identifiers:
+        # Autodetect gene identifier
+        id_type = decode_id(identifier)
+        # get gff3 column while we're at it
+        id_column = id_gff3_names[id_type]
+        if id_type:
+            info(identifier + " => " + id_descriptions[id_type])
+        region = do_gff3_stuff(annot, id_column, identifier, args.up, args.down)
+        if not bool(region):
+            print()
+            continue
+        chrom = region.chrom
+        bed_start = region.start
+        bed_stop = region.stop 
+        bedtools_cmd(chrom,str(bed_start),str(bed_stop), identifier, config['fasta'],str(identifier) + '_fastaout.fa')
+        print()
+
 #
 # Print warning / exit messages according to template
 #
