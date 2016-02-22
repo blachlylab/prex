@@ -55,15 +55,16 @@ def validate_file(filename):
     '''
     Check whether the input file exists and is readable
     '''
-    if not os.path.isfile(os.path.abspath(os.path.expanduser(filename))):
-        abort("File not found: " + filename)
+    normpath = os.path.abspath(os.path.expanduser(filename))
+    if not os.path.isfile(normpath):
+        abort("File not found: " + normpath)
     else:
         try:
-            open(filename)
-            info(filename)
+            open(normpath)
+            info(normpath)
         except Exception as e:
-            abort(e)
-    return os.path.abspath(os.path.expanduser(filename))
+            abort(str(e))
+    return normpath
 
 def decode_id(identifier):
     """
