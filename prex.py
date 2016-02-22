@@ -220,7 +220,7 @@ def main():
         chrom = region.chrom
         bed_start = region.start
         bed_stop = region.stop 
-        fastaout_fn = args.identifier + ".fa"
+        fastaout_fn = identifier + ".fa"
         bedtools_cmd(chrom,str(bed_start),str(bed_stop), identifier, config['fasta'], fastaout_fn)
         print()
 
