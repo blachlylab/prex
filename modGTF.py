@@ -67,7 +67,7 @@ def parse(line):
     """
     # karl modification
     # how to identify the principal isoforms
-    PRINCIPAL_TAG = "appris_principal_1"
+    PRINCIPAL_TAG = "appris_principal"
     # end karl modification 
     result = {}
 
@@ -96,6 +96,10 @@ def parse(line):
             #     as a way to extract the principal isoforms
             if key == "tag" and str(PRINCIPAL_TAG) not in value:
                 result[key] = None
+            elif key == "tag" and str(PRINCIPAL_TAG)  in value:
+                result[key] = _get_value(value)
+                # add a new field for the appris principal number
+                result[PRINCIPAL_TAG] =  ",".join([ x.split('_')[-1] for x in _get_value(value) if PRINCIPAL_TAG in x ])
             else:
                 result[key] = _get_value(value)
             #end karl mod    

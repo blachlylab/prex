@@ -94,7 +94,7 @@ def using_new_bedtools():
         return True
 
 
-def bedtools_cmd(chrom, start, end, identifier, fasta_in, fasta_out):
+def bedtools_cmd(region, identifier, fasta_in, fasta_out):
     """
     TBD
 
@@ -107,9 +107,16 @@ def bedtools_cmd(chrom, start, end, identifier, fasta_in, fasta_out):
     -tab    Report extract sequences in a tab-delimited format instead of in FASTA format.
     -s      Force strandedness. If the feature occupies the antisense strand, the sequence will be reverse complemented. Default: strand information is ignored.
     -split  Given BED12 input, extract and concatenate the sequences from the BED blocks (e.g., exons)
-    """
-    bed_name = identifier + ";promoter;" + chrom + ":" + str(start) + "-" + str(end)
-    bed_fields = [chrom, start, end, bed_name]
+    """ 
+    chrom  = str(region.chrom)
+    start  = str(region.start)
+    end    = str(region.end)
+    name   = str(region.name)
+    score  = str(region.score)
+    strand = str(region.strand)
+
+    bed_name = name + ";promoter;" + chrom + ":" + start + "-" + end + "(" + strand + ")"
+    bed_fields = [chrom, start, end, bed_name, score, strand ]
     bed_line   = '\t'.join(bed_fields) + '\n'       # fails without newline
     
     with tempfile.NamedTemporaryFile(mode='w') as bedfileptr:
@@ -133,44 +140,64 @@ def bedtools_cmd(chrom, start, end, identifier, fasta_in, fasta_out):
             outfile.close()
     return True
 
-def do_gff3_stuff(annot, id_column, identifier, up, down):
-    # Do GFF3 stuff here
-    
-    pAnnot = annot.dropna(subset=['tag'])
-    tmp = pAnnot[pAnnot[id_column]==identifier][['feature','seqname','start','strand']].drop_duplicates()
-    if len(tmp) == 0 and len(annot[annot[id_column]==identifier]) == 0:
-        abort("no {0} known by this identifier: {1}".format(id_column, identifier))
-    
-    
-    # a check for whether any features have more than 1 primary start codon or no primary start codon. 
-    # code will not work correctly in these cases
-    if len(tmp[tmp["feature"]=="start_codon"]) < 1:
+def validate_identifier(annot, id_column, identifier):
+    '''
+    Check that the given identifier exists in the annotation,
+        and has exactly 1 principal isoform. The principal isoform
+        can have any appris_principal value [i.e. 1, 2, 3 ... etc.] 
+        but there must be a single transcript with the principal tag.
+
+    Returns True if OK, False otherwise
+    '''
+    # slice dataframe to the given identifier
+    _this_gene = annot[annot[id_column]==identifier]
+    # count the number of start_codon rows that have non-null appris_principal columns
+    # multiple start codons with appris numbers may indicate multiple principal isoform annotations 
+    # - not currently supported unless they share their start codons
+    sub = _this_gene.dropna(subset=['appris_principal'])
+    principal_count = len(sub[sub['feature']=='start_codon'][['start','end']].drop_duplicates())
+
+    if len(_this_gene) == 0:
+        # empty dataframe slice
+        warn("no {0} known by this identifier: {1}".format(id_column, identifier))
+        return False
+    if principal_count == 0:
+        # gene is found, but no principal isoform is known
         warn("no principal isoform found for {0}".format(identifier))
-        return Region()
-    elif len(tmp[tmp["feature"]=="start_codon"]) > 1:
+        return False
+    elif principal_count > 1:
+        # gene is found, but there're too many principal isoforms
+        # TODO: handle principal trumps, i.e. appris_principal_1 > appris_principal_2 > appris_principal_3 ... etc.
         warn("too many primary isoforms for {0}".format(identifier))
-        return Region()
-    
-    
-    CDS = tmp[tmp["feature"]=="start_codon"]["start"].values[0]
-    chrom = tmp[tmp["feature"]=="start_codon"]["seqname"].values[0]
-    strand = tmp[tmp["feature"]=="start_codon"]["strand"].values[0]
+        return False
+    else:
+        # there must be a single principal isoform; valid.
+        pass
+    return True 
+
+def do_gff3_stuff(principal, id_column, identifier, up, down):
+    start_codon = principal[principal["feature"]=="start_codon"]
+    CDS = start_codon["start"].values[0]
+    chrom = start_codon["seqname"].values[0]
+    strand = start_codon["strand"].values[0]
     if strand == "+":
         bed_start = CDS - up 
-        bed_stop  = CDS + down 
+        bed_end  = CDS + down 
     elif strand == "-":
         bed_start = CDS - down 
-        bed_stop  = CDS + up
-    return Region(chrom, bed_start, bed_stop)
+        bed_end  = CDS + up
+    return Region(chrom, bed_start, bed_end, identifier, '.', strand)
 
 class Region(object):
-    def __init__(self, chrom=None, start=None, stop=None):
+    def __init__(self, chrom=None, start=None, end=None, name=None ,score=None ,strand=None ):
         self.chrom = chrom
         self.start = start
-        self.stop = stop
-        # can also add name, score, and strand later on if necessary
+        self.end = end
+        self.name = name 
+        self.score = score
+        self.strand = strand 
     def __bool__(self):
-        if any([self.chrom, self.start, self.stop]):
+        if any([self.chrom, self.start, self.end, self.name, self.score, self.strand]):
             return True 
         else:
             return False 
@@ -204,7 +231,9 @@ def main():
     annot = gtf.dataframe(config['gff3'])
     # cast start as int
     annot.loc[annot.index ,'start'] = annot['start'].astype(int)
-    info("probing genes")     
+    # subset and slice dataframe to the principal isoforms and relevant columns for GFF3 work
+    principals = annot.dropna(subset=['appris_principal'])[['gene_name','gene_id','transcript_name','transcript_id','appris_principal']].drop_duplicates()
+    info("probing genes\n")     
 
     for identifier in args.identifiers:
         # Autodetect gene identifier
@@ -213,15 +242,22 @@ def main():
         id_column = id_gff3_names[id_type]
         if id_type:
             info(identifier + " => " + id_descriptions[id_type])
-        region = do_gff3_stuff(annot, id_column, identifier, args.up, args.down)
+        if not validate_identifier(annot, id_column, identifier):
+            # something wrong with this identifier
+            # skip it 
+            print()
+            continue
+        else:
+            # The following is only safe if the identifier is valid. If not valid, could lead to
+            #    index errors (no principal isoform) or information loss (more than 1 principal isoform)
+            # If multiple principal transcripts share a start codon, it's safe to arbitrarily pick one
+            primary_isoform = principals[principals[id_column]==identifier]['transcript_id'].values[0]
+        region = do_gff3_stuff(annot[annot['transcript_id']==primary_isoform], id_column, identifier, args.up, args.down)
         if not bool(region):
             print()
             continue
-        chrom = region.chrom
-        bed_start = region.start
-        bed_stop = region.stop 
         fastaout_fn = identifier + ".fa"
-        bedtools_cmd(chrom,str(bed_start),str(bed_stop), identifier, config['fasta'], fastaout_fn)
+        bedtools_cmd(region, identifier, config['fasta'], fastaout_fn)
         print()
 
 #
